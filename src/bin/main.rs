@@ -174,7 +174,7 @@ async fn udp_listener_task(stack: Stack<'static>) {
         );
 
         if let Err(e) = socket.bind(atlas_controller::config::UDP_PORT) {
-            log::warn!("UDP bind error: {:?}", e);
+            log::warn!("UDP bind error: {e:?}");
             Timer::after(Duration::from_secs(1)).await;
             continue;
         }
@@ -208,14 +208,14 @@ async fn udp_listener_task(stack: Stack<'static>) {
                             0x02 => {
                                 log::info!("Received Auto Mode UDP request. Ignoring standalone.");
                             }
-                            _ => log::warn!("Unknown UDP packet type: {:#04X}", packet_type),
+                            _ => log::warn!("Unknown UDP packet type: {packet_type:#04X}"),
                         }
                     } else {
-                        log::warn!("Received malformed UDP packet of size {}", size);
+                        log::warn!("Received malformed UDP packet of size {size}");
                     }
                 }
                 Err(e) => {
-                    log::warn!("UDP recv error: {:?}", e);
+                    log::warn!("UDP recv error: {e:?}");
                     break;
                 }
             }
