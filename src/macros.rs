@@ -16,7 +16,9 @@ macro_rules! define_robot_config {
             block_lift_when_driving: $s_block_lift:expr,
             block_drive_when_lifting: $s_block_drive:expr,
             estop_latch: $s_estop:expr $(,)?
-        }
+        },
+        wifi: { ssid: $wifi_ssid:literal, password: $wifi_pass:literal, ip: [$ip0:literal, $ip1:literal, $ip2:literal, $ip3:literal] $(,)? },
+        udp: { port: $udp_port:literal $(,)? }
     ) => {
         pub const UART_BAUD: u32 = $u_baud;
         pub const MOTOR_FREQ_HZ: u32 = $m_freq;
@@ -25,6 +27,10 @@ macro_rules! define_robot_config {
         pub const INTERLOCK_BLOCK_LIFT_WHEN_DRIVING: bool = $s_block_lift;
         pub const INTERLOCK_BLOCK_DRIVE_WHEN_LIFTING: bool = $s_block_drive;
         pub const ESTOP_LATCH: bool = $s_estop;
+        pub const WIFI_SSID: &str = $wifi_ssid;
+        pub const WIFI_PASSWORD: &str = $wifi_pass;
+        pub const WIFI_IP: [u8; 4] = [$ip0, $ip1, $ip2, $ip3];
+        pub const UDP_PORT: u16 = $udp_port;
 
         #[macro_export]
         macro_rules! init_robot_hardware {

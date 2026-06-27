@@ -14,5 +14,7 @@ crate::define_robot_config! {
         block_lift_when_driving: true,
         block_drive_when_lifting: true,
         estop_latch: true,
-    }
+    },
+    wifi: { ssid: "ATLAS_ESP32", password: "AtlasWillHoldTheWorld", ip: [192, 168, 4, 1] },
+    udp: { port: 5005 }
 }

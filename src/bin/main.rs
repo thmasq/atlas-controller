@@ -2,6 +2,9 @@
 #![no_main]
 #![allow(clippy::future_not_send, clippy::large_stack_frames)]
 
+extern crate alloc;
+
+use alloc::string::ToString;
 use atlas_controller::motors::MotorController;
 use atlas_controller::protocol::FrameParser;
 use atlas_controller::{
@@ -11,15 +14,31 @@ use atlas_controller::{
     sensors::{AsyncMpu6050, Hmc5883l, run_sensors},
 };
 use embassy_executor::Spawner;
+use embassy_net::{
+    Config, Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4,
+    udp::{PacketMetadata, UdpSocket},
+};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, watch::Watch};
-use embassy_time::{Duration, Instant, Ticker};
+use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
+use esp_hal::rng::Rng;
 use esp_hal::uart::UartRx;
 use esp_hal::{Async, ledc::LowSpeed, uart::UartTx};
+use esp_radio::wifi::{Config as WifiDriverConfig, ap::AccessPointConfig};
+use static_cell::StaticCell;
 
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 10> = Channel::new();
 static SENSOR_WATCH: Watch<CriticalSectionRawMutex, SensorSnapshot, 2> = Watch::new();
+
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: StaticCell<$t> = StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.init($val);
+        x
+    }};
+}
 
 async fn uart_rx_task_impl(mut rx: impl embedded_io_async::Read) {
     let mut parser = FrameParser::new();
@@ -128,6 +147,82 @@ async fn sensor_task(
     sensor_task_impl(i2c0, i2c1).await;
 }
 
+#[embassy_executor::task]
+async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::Interface<'static>>) {
+    runner.run().await;
+}
+
+#[embassy_executor::task]
+async fn udp_listener_task(stack: Stack<'static>) {
+    let mut rx_meta = [PacketMetadata::EMPTY; 16];
+    let mut rx_buffer = [0; 1024];
+    let mut tx_meta = [PacketMetadata::EMPTY; 16];
+    let mut tx_buffer = [0; 1024];
+
+    loop {
+        if !stack.is_link_up() {
+            Timer::after(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        let mut socket = UdpSocket::new(
+            stack,
+            &mut rx_meta,
+            &mut rx_buffer,
+            &mut tx_meta,
+            &mut tx_buffer,
+        );
+
+        if let Err(e) = socket.bind(atlas_controller::config::UDP_PORT) {
+            log::warn!("UDP bind error: {:?}", e);
+            Timer::after(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        log::info!(
+            "UDP Listener bound to {}.{}.{}.{}:{} on {}",
+            atlas_controller::config::WIFI_IP[0],
+            atlas_controller::config::WIFI_IP[1],
+            atlas_controller::config::WIFI_IP[2],
+            atlas_controller::config::WIFI_IP[3],
+            atlas_controller::config::UDP_PORT,
+            atlas_controller::config::WIFI_SSID
+        );
+
+        loop {
+            let mut buf = [0u8; 8];
+            match socket.recv_from(&mut buf).await {
+                Ok((size, _remote_endpoint)) => {
+                    if size == 8 {
+                        let packet_type = buf[0];
+                        let left = buf[1] as i8;
+                        let right = buf[2] as i8;
+                        let _flags = buf[3];
+                        let lift = buf[4] as i8;
+
+                        match packet_type {
+                            0x01 => {
+                                let _ = COMMAND_CHANNEL.try_send(Command::Drive { left, right });
+                                let _ = COMMAND_CHANNEL.try_send(Command::Lift { power: lift });
+                            }
+                            0x02 => {
+                                log::info!("Received Auto Mode UDP request. Ignoring standalone.");
+                            }
+                            _ => log::warn!("Unknown UDP packet type: {:#04X}", packet_type),
+                        }
+                    } else {
+                        log::warn!("Received malformed UDP packet of size {}", size);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("UDP recv error: {:?}", e);
+                    break;
+                }
+            }
+        }
+    }
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -145,7 +240,46 @@ async fn main(spawner: Spawner) -> ! {
     let (uart_bus, i2c_mpu, i2c_mag, motors) = atlas_controller::init_robot_hardware!(peripherals);
     let (rx, tx) = uart_bus.split();
 
+    let rng = Rng::new();
+    let seed = u64::from(rng.random());
+
+    let ap_config = WifiDriverConfig::AccessPoint(
+        AccessPointConfig::default()
+            .with_ssid(atlas_controller::config::WIFI_SSID)
+            .with_password(atlas_controller::config::WIFI_PASSWORD.to_string()),
+    );
+
+    let (controller, interfaces) = esp_radio::wifi::new(
+        peripherals.WIFI,
+        esp_radio::wifi::ControllerConfig::default().with_initial_config(ap_config),
+    )
+    .unwrap();
+
+    let wifi_interface = interfaces.access_point;
+
+    let ip = atlas_controller::config::WIFI_IP;
+    let controller_ip = Ipv4Address::new(ip[0], ip[1], ip[2], ip[3]);
+
+    let net_config = Config::ipv4_static(StaticConfigV4 {
+        address: Ipv4Cidr::new(controller_ip, 24),
+        gateway: None,
+        dns_servers: Default::default(),
+    });
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        net_config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        seed,
+    );
+
+    let _wifi_controller = controller;
+
+    spawner.spawn(net_task(runner).unwrap());
+    spawner.spawn(udp_listener_task(stack).unwrap());
+
     spawner.spawn(uart_rx_task(rx).unwrap());
+
     spawner.spawn(sensor_task(i2c_mpu, i2c_mag).unwrap());
     spawner.spawn(control_task(motors, tx).unwrap());
 
