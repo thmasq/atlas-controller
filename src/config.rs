@@ -1,5 +1,5 @@
 crate::define_robot_config! {
-    uart: { port: 1, baud: 115200, tx_pin: 17, rx_pin: 16 },
+    uart: { port: 1, baud: 115_200, tx_pin: 17, rx_pin: 16 },
     mpu6050: { i2c_port: 0, sda_pin: 19, scl_pin: 18 },
     hmc5883l: { i2c_port: 1, sda_pin: 21, scl_pin: 22 },
     motors: {

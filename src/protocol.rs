@@ -1,8 +1,10 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+
 const FRAME_START: u8 = 0xAA;
 const MAX_PAYLOAD: u8 = 8;
 
 /// Commands received from the UART.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Drive { left: i8, right: i8 },
     Stop,
@@ -12,7 +14,7 @@ pub enum Command {
 }
 
 /// Errors that can occur during frame parsing.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseError {
     InvalidLength,
     InvalidCrc,
@@ -30,7 +32,7 @@ impl Response {
     /// Returns the number of bytes written, or `None` if the buffer is too small.
     pub fn build_frame(&self, out: &mut [u8]) -> Option<usize> {
         match self {
-            Response::SensorStatus { flags, heading_deg } => {
+            Self::SensorStatus { flags, heading_deg } => {
                 const LEN_SENSOR_STATUS: usize = 5;
                 const TOTAL_FRAME_SIZE: usize = 1 + 1 + 1 + LEN_SENSOR_STATUS + 1;
 
@@ -53,9 +55,10 @@ impl Response {
     }
 }
 
-/// Internal state for the FrameParser.
-#[derive(Debug, Clone, Copy)]
+/// Internal state for the `FrameParser`.
+#[derive(Debug, Clone, Copy, Default)]
 enum ParserState {
+    #[default]
     WaitStart,
     Cmd,
     Len {
@@ -74,12 +77,6 @@ enum ParserState {
     },
 }
 
-impl Default for ParserState {
-    fn default() -> Self {
-        Self::WaitStart
-    }
-}
-
 /// Parses incoming UART bytes into `Command`s.
 #[derive(Default)]
 pub struct FrameParser {
@@ -87,12 +84,13 @@ pub struct FrameParser {
 }
 
 impl FrameParser {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Resets the parser to its initial state.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.state = ParserState::WaitStart;
     }
 
@@ -181,7 +179,7 @@ impl FrameParser {
                         power: buffer[0] as i8,
                     }),
 
-                    0x01 | 0x02 | 0x03 | 0x04 | 0x05 => Err(ParseError::InvalidLength),
+                    0x01..=0x05 => Err(ParseError::InvalidLength),
 
                     _ => Err(ParseError::UnknownCommand(cmd)),
                 };
@@ -194,6 +192,7 @@ impl FrameParser {
 
 /// Calculates the CRC-8/MAXIM checksum.
 /// Polynomial 0x31, init 0x00, reflect in/out.
+#[must_use]
 pub fn crc8_maxim(data: &[u8]) -> u8 {
     let mut crc = 0x00u8;
     for &byte in data {

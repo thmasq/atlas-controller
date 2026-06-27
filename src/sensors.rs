@@ -1,10 +1,12 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+
 use crate::control::SensorSnapshot;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_async::i2c::I2c;
 use esp_hal::gpio::{Input, Output};
 
-/// no_std, async driver for the HMC5883L Magnetometer
+/// `no_std`, async driver for the HMC5883L Magnetometer
 pub struct Hmc5883l<I2C> {
     i2c: I2C,
     address: u8,
@@ -15,6 +17,11 @@ where
     I2C: I2c<Error = E>,
 {
     /// Creates a new driver and configures the sensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I2C bus fails to write the configuration bytes
+    /// during initialization.
     pub async fn new(mut i2c: I2C, address: u8) -> Result<Self, E> {
         i2c.write(address, &[0x01, 0x20]).await?;
         i2c.write(address, &[0x02, 0x00]).await?;
@@ -25,6 +32,10 @@ where
     }
 
     /// Reads the magnetometer axes. Returns (X, Y, Z).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I2C bus fails during the read operation.
     pub async fn read(&mut self) -> Result<(i16, i16, i16), E> {
         let mut buf = [0u8; 6];
 
@@ -48,23 +59,33 @@ impl<I2C, E> AsyncMpu6050<I2C>
 where
     I2C: I2c<Error = E>,
 {
+    /// Creates a new driver and wakes up the sensor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I2C bus fails to write the wakeup command
+    /// during initialization.
     pub async fn new(mut i2c: I2C, address: u8) -> Result<Self, E> {
         i2c.write(address, &[0x6B, 0x00]).await?;
         Ok(Self { i2c, address })
     }
 
-    /// Returns ([Accel X, Y, Z in g], [Gyro X, Y, Z in deg/s])
+    /// Returns ([Accel X, Y, Z in g], [Gyro X, Y, Z in deg/s]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying I2C bus fails during the read operation.
     pub async fn read(&mut self) -> Result<([f32; 3], [f32; 3]), E> {
         let mut buf = [0u8; 14];
         self.i2c.write_read(self.address, &[0x3B], &mut buf).await?;
 
-        let ax = i16::from_be_bytes([buf[0], buf[1]]) as f32 / 16384.0;
-        let ay = i16::from_be_bytes([buf[2], buf[3]]) as f32 / 16384.0;
-        let az = i16::from_be_bytes([buf[4], buf[5]]) as f32 / 16384.0;
+        let ax = f32::from(i16::from_be_bytes([buf[0], buf[1]])) / 16384.0;
+        let ay = f32::from(i16::from_be_bytes([buf[2], buf[3]])) / 16384.0;
+        let az = f32::from(i16::from_be_bytes([buf[4], buf[5]])) / 16384.0;
 
-        let gx = i16::from_be_bytes([buf[8], buf[9]]) as f32 / 131.0;
-        let gy = i16::from_be_bytes([buf[10], buf[11]]) as f32 / 131.0;
-        let gz = i16::from_be_bytes([buf[12], buf[13]]) as f32 / 131.0;
+        let gx = f32::from(i16::from_be_bytes([buf[8], buf[9]])) / 131.0;
+        let gy = f32::from(i16::from_be_bytes([buf[10], buf[11]])) / 131.0;
+        let gz = f32::from(i16::from_be_bytes([buf[12], buf[13]])) / 131.0;
 
         Ok(([ax, ay, az], [gx, gy, gz]))
     }
@@ -77,7 +98,8 @@ pub struct Ultrasonic<'d> {
 }
 
 impl<'d> Ultrasonic<'d> {
-    pub fn new(trig: Output<'d>, echo: Input<'d>) -> Self {
+    #[must_use]
+    pub const fn new(trig: Output<'d>, echo: Input<'d>) -> Self {
         Self { trig, echo }
     }
 

@@ -1,3 +1,5 @@
+#![allow(clippy::cast_possible_truncation)]
+
 use crate::control::MotorAction;
 use esp_hal::ledc::{
     channel::{Channel, ChannelIFace},
@@ -20,7 +22,8 @@ pub struct Bts7960Motor<'a, S: TimerSpeed> {
 }
 
 impl<'a, S: TimerSpeed> Bts7960Motor<'a, S> {
-    pub fn new(rpwm: Channel<'a, S>, lpwm: Channel<'a, S>, ramp_step: i8) -> Self {
+    #[must_use]
+    pub const fn new(rpwm: Channel<'a, S>, lpwm: Channel<'a, S>, ramp_step: i8) -> Self {
         Self {
             rpwm,
             lpwm,
@@ -44,24 +47,24 @@ impl<'a, S: TimerSpeed> Bts7960Motor<'a, S> {
 
     /// Steps the current speed towards the target speed by the `ramp_step`.
     pub fn step(&mut self) {
-        let diff = self.target_speed as i16 - self.current_speed as i16;
+        let diff = i16::from(self.target_speed) - i16::from(self.current_speed);
         if diff == 0 {
             return;
         }
 
         let step = if diff > 0 {
-            core::cmp::min(diff, self.ramp_step as i16)
+            core::cmp::min(diff, i16::from(self.ramp_step))
         } else {
-            core::cmp::max(diff, -(self.ramp_step as i16))
+            core::cmp::max(diff, -i16::from(self.ramp_step))
         };
 
-        self.current_speed = (self.current_speed as i16 + step) as i8;
+        self.current_speed = (i16::from(self.current_speed) + step) as i8;
         self.apply_speed();
     }
 
     /// Writes the current speed to the PWM hardware.
-    fn apply_speed(&mut self) {
-        let duty_pct = self.current_speed.abs() as u8;
+    fn apply_speed(&self) {
+        let duty_pct = self.current_speed.unsigned_abs();
 
         if self.current_speed >= 0 {
             let _ = self.rpwm.set_duty(duty_pct);
@@ -81,7 +84,7 @@ pub struct Motors<'a, S: TimerSpeed> {
 }
 
 // We change this block from `impl Motors` to `impl MotorController for Motors`
-impl<'a, S: TimerSpeed> MotorController for Motors<'a, S> {
+impl<S: TimerSpeed> MotorController for Motors<'_, S> {
     /// Evaluates a `MotorAction` and delegates to the individual motors.
     fn apply_action(&mut self, action: MotorAction) {
         if action.emergency_stop {

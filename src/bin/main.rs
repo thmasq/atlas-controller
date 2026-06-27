@@ -27,12 +27,9 @@ async fn uart_rx_task_impl(mut rx: impl embedded_io_async::Read) {
     log::info!("UART RX Task Started");
 
     loop {
-        let len = match embedded_io_async::Read::read(&mut rx, &mut buf).await {
-            Ok(l) => l,
-            Err(_) => {
-                log::warn!("UART Read Error");
-                continue;
-            }
+        let Ok(len) = embedded_io_async::Read::read(&mut rx, &mut buf).await else {
+            log::warn!("UART Read Error");
+            continue;
         };
 
         for &byte in &buf[..len] {
@@ -42,9 +39,9 @@ async fn uart_rx_task_impl(mut rx: impl embedded_io_async::Read) {
 
             match result {
                 Ok(cmd) => {
-                    let _ = COMMAND_CHANNEL.send(cmd).await;
+                    let () = COMMAND_CHANNEL.send(cmd).await;
                 }
-                Err(e) => log::warn!("UART Parse Error: {:?}", e),
+                Err(e) => log::warn!("UART Parse Error: {e:?}"),
             }
         }
     }
@@ -86,10 +83,10 @@ async fn control_task_impl(
                     };
 
                     let mut buf = [0u8; 16];
-                    if let Some(len) = response.build_frame(&mut buf) {
-                        if let Err(_) = tx.write_all(&buf[..len]).await {
-                            log::warn!("UART TX Error");
-                        }
+                    if let Some(len) = response.build_frame(&mut buf)
+                        && let Err(_) = tx.write_all(&buf[..len]).await
+                    {
+                        log::warn!("UART TX Error");
                     }
                     continue;
                 }
