@@ -1,29 +1,26 @@
 #![no_std]
 #![no_main]
 
+use atlas_controller::motors::MotorController;
+use atlas_controller::protocol::FrameParser;
 use atlas_controller::{
     control::{Controller, SensorSnapshot, Settings},
     motors::Motors,
-    protocol::{Command, FrameParser, Response},
+    protocol::{Command, Response},
     sensors::{AsyncMpu6050, Hmc5883l, run_sensors},
 };
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, watch::Watch};
 use embassy_time::{Duration, Instant, Ticker};
-use embedded_io_async::Write;
 use esp_alloc as _;
 use esp_backtrace as _;
-use esp_hal::{
-    Async,
-    ledc::LowSpeed,
-    uart::{UartRx, UartTx},
-};
+use esp_hal::uart::UartRx;
+use esp_hal::{Async, ledc::LowSpeed, uart::UartTx};
 
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 10> = Channel::new();
 static SENSOR_WATCH: Watch<CriticalSectionRawMutex, SensorSnapshot, 2> = Watch::new();
 
-#[embassy_executor::task]
-async fn uart_rx_task(mut rx: UartRx<'static, Async>) {
+async fn uart_rx_task_impl(mut rx: impl embedded_io_async::Read) {
     let mut parser = FrameParser::new();
     let mut buf = [0u8; 64];
 
@@ -32,8 +29,8 @@ async fn uart_rx_task(mut rx: UartRx<'static, Async>) {
     loop {
         let len = match embedded_io_async::Read::read(&mut rx, &mut buf).await {
             Ok(l) => l,
-            Err(e) => {
-                log::warn!("UART Read Error: {:?}", e);
+            Err(_) => {
+                log::warn!("UART Read Error");
                 continue;
             }
         };
@@ -54,7 +51,14 @@ async fn uart_rx_task(mut rx: UartRx<'static, Async>) {
 }
 
 #[embassy_executor::task]
-async fn control_task(mut motors: Motors<'static, LowSpeed>, mut tx: UartTx<'static, Async>) {
+async fn uart_rx_task(rx: UartRx<'static, Async>) {
+    uart_rx_task_impl(rx).await;
+}
+
+async fn control_task_impl(
+    mut motors: impl MotorController,
+    mut tx: impl embedded_io_async::Write,
+) {
     let mut controller = Controller::new(Settings::default(), Instant::now());
     let mut ticker = Ticker::every(Duration::from_millis(
         atlas_controller::config::CONTROL_TASK_INTERVAL_MS,
@@ -83,8 +87,8 @@ async fn control_task(mut motors: Motors<'static, LowSpeed>, mut tx: UartTx<'sta
 
                     let mut buf = [0u8; 16];
                     if let Some(len) = response.build_frame(&mut buf) {
-                        if let Err(e) = tx.write_all(&buf[..len]).await {
-                            log::warn!("UART TX Error: {:?}", e);
+                        if let Err(_) = tx.write_all(&buf[..len]).await {
+                            log::warn!("UART TX Error");
                         }
                     }
                     continue;
@@ -103,15 +107,27 @@ async fn control_task(mut motors: Motors<'static, LowSpeed>, mut tx: UartTx<'sta
 }
 
 #[embassy_executor::task]
-async fn sensor_task(
-    i2c0: esp_hal::i2c::master::I2c<'static, Async>,
-    i2c1: esp_hal::i2c::master::I2c<'static, Async>,
+async fn control_task(motors: Motors<'static, LowSpeed>, tx: UartTx<'static, Async>) {
+    control_task_impl(motors, tx).await;
+}
+
+async fn sensor_task_impl(
+    i2c0: impl embedded_hal_async::i2c::I2c,
+    i2c1: impl embedded_hal_async::i2c::I2c,
 ) {
     let mag = Hmc5883l::new(i2c1, 0x1E).await.unwrap();
     let mpu = AsyncMpu6050::new(i2c0, 0x68).await.unwrap();
 
     let sender = SENSOR_WATCH.sender();
     run_sensors(mag, mpu, sender).await;
+}
+
+#[embassy_executor::task]
+async fn sensor_task(
+    i2c0: esp_hal::i2c::master::I2c<'static, Async>,
+    i2c1: esp_hal::i2c::master::I2c<'static, Async>,
+) {
+    sensor_task_impl(i2c0, i2c1).await;
 }
 
 #[esp_rtos::main]

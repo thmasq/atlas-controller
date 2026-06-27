@@ -4,6 +4,12 @@ use esp_hal::ledc::{
     timer::TimerSpeed,
 };
 
+/// Trait defining how the motors should be controlled.
+pub trait MotorController {
+    fn apply_action(&mut self, action: MotorAction);
+    fn step_all(&mut self);
+}
+
 /// Represents a single BTS7960 Motor driver with an RPWM and LPWM pin.
 pub struct Bts7960Motor<'a, S: TimerSpeed> {
     rpwm: Channel<'a, S>,
@@ -74,9 +80,10 @@ pub struct Motors<'a, S: TimerSpeed> {
     pub lift: Bts7960Motor<'a, S>,
 }
 
-impl<'a, S: TimerSpeed> Motors<'a, S> {
+// We change this block from `impl Motors` to `impl MotorController for Motors`
+impl<'a, S: TimerSpeed> MotorController for Motors<'a, S> {
     /// Evaluates a `MotorAction` and delegates to the individual motors.
-    pub fn apply_action(&mut self, action: MotorAction) {
+    fn apply_action(&mut self, action: MotorAction) {
         if action.emergency_stop {
             self.left.set_immediate(0);
             self.right.set_immediate(0);
@@ -102,7 +109,7 @@ impl<'a, S: TimerSpeed> Motors<'a, S> {
 
     /// Should be called periodically (e.g., every 10ms-20ms) inside the `control_task`
     /// to update the PWM ramps.
-    pub fn step_all(&mut self) {
+    fn step_all(&mut self) {
         self.left.step();
         self.right.step();
         self.lift.step();
