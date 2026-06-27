@@ -83,7 +83,6 @@ pub struct Motors<'a, S: TimerSpeed> {
     pub lift: Bts7960Motor<'a, S>,
 }
 
-// We change this block from `impl Motors` to `impl MotorController for Motors`
 impl<S: TimerSpeed> MotorController for Motors<'_, S> {
     /// Evaluates a `MotorAction` and delegates to the individual motors.
     fn apply_action(&mut self, action: MotorAction) {
@@ -110,8 +109,7 @@ impl<S: TimerSpeed> MotorController for Motors<'_, S> {
         }
     }
 
-    /// Should be called periodically (e.g., every 10ms-20ms) inside the `control_task`
-    /// to update the PWM ramps.
+    /// Should be called periodically inside the `control_task` to update the PWM ramps.
     fn step_all(&mut self) {
         self.left.step();
         self.right.step();

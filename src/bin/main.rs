@@ -15,7 +15,7 @@ use atlas_controller::{
 };
 use embassy_executor::Spawner;
 use embassy_net::{
-    Config, Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4,
+    Config, Ipv4Address, Ipv4Cidr, Stack as NetStack, StackResources, StaticConfigV4,
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel, watch::Watch};
@@ -23,13 +23,19 @@ use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::rng::Rng;
+use esp_hal::system::{CpuControl, Stack as CpuStack};
 use esp_hal::uart::UartRx;
 use esp_hal::{Async, ledc::LowSpeed, uart::UartTx};
 use esp_radio::wifi::{Config as WifiDriverConfig, ap::AccessPointConfig};
+use esp_rtos::embassy::Executor;
 use static_cell::StaticCell;
 
 static COMMAND_CHANNEL: Channel<CriticalSectionRawMutex, Command, 10> = Channel::new();
+static RESPONSE_CHANNEL: Channel<CriticalSectionRawMutex, Response, 10> = Channel::new();
 static SENSOR_WATCH: Watch<CriticalSectionRawMutex, SensorSnapshot, 2> = Watch::new();
+
+static CORE1_STACK: StaticCell<CpuStack<8192>> = StaticCell::new();
+static CORE1_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
@@ -72,10 +78,24 @@ async fn uart_rx_task(rx: UartRx<'static, Async>) {
     uart_rx_task_impl(rx).await;
 }
 
-async fn control_task_impl(
-    mut motors: impl MotorController,
-    mut tx: impl embedded_io_async::Write,
-) {
+async fn uart_tx_task_impl(mut tx: impl embedded_io_async::Write) {
+    loop {
+        let response = RESPONSE_CHANNEL.receive().await;
+        let mut buf = [0u8; 16];
+        if let Some(len) = response.build_frame(&mut buf)
+            && let Err(_) = embedded_io_async::Write::write_all(&mut tx, &buf[..len]).await
+        {
+            log::warn!("UART TX Error");
+        }
+    }
+}
+
+#[embassy_executor::task]
+async fn uart_tx_task(tx: UartTx<'static, Async>) {
+    uart_tx_task_impl(tx).await;
+}
+
+async fn control_task_impl(mut motors: impl MotorController) {
     let mut controller = Controller::new(Settings::default(), Instant::now());
     let mut ticker = Ticker::every(Duration::from_millis(
         atlas_controller::config::CONTROL_TASK_INTERVAL_MS,
@@ -102,12 +122,7 @@ async fn control_task_impl(
                         heading_deg: status.heading_deg,
                     };
 
-                    let mut buf = [0u8; 16];
-                    if let Some(len) = response.build_frame(&mut buf)
-                        && let Err(_) = tx.write_all(&buf[..len]).await
-                    {
-                        log::warn!("UART TX Error");
-                    }
+                    let _ = RESPONSE_CHANNEL.try_send(response);
                     continue;
                 }
             };
@@ -124,8 +139,8 @@ async fn control_task_impl(
 }
 
 #[embassy_executor::task]
-async fn control_task(motors: Motors<'static, LowSpeed>, tx: UartTx<'static, Async>) {
-    control_task_impl(motors, tx).await;
+async fn control_task(motors: Motors<'static, LowSpeed>) {
+    control_task_impl(motors).await;
 }
 
 async fn sensor_task_impl(
@@ -153,7 +168,7 @@ async fn net_task(mut runner: embassy_net::Runner<'static, esp_radio::wifi::Inte
 }
 
 #[embassy_executor::task]
-async fn udp_listener_task(stack: Stack<'static>) {
+async fn udp_listener_task(stack: NetStack<'static>) {
     let mut rx_meta = [PacketMetadata::EMPTY; 16];
     let mut rx_buffer = [0; 1024];
     let mut tx_meta = [PacketMetadata::EMPTY; 16];
@@ -237,7 +252,9 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let (uart_bus, i2c_mpu, i2c_mag, motors) = atlas_controller::init_robot_hardware!(peripherals);
+    let mut cpu_control = CpuControl::new(peripherals.CPU_CTRL);
+
+    let uart_bus = atlas_controller::init_core0_hardware!(peripherals);
     let (rx, tx) = uart_bus.split();
 
     let rng = Rng::new();
@@ -277,11 +294,23 @@ async fn main(spawner: Spawner) -> ! {
 
     spawner.spawn(net_task(runner).unwrap());
     spawner.spawn(udp_listener_task(stack).unwrap());
-
     spawner.spawn(uart_rx_task(rx).unwrap());
+    spawner.spawn(uart_tx_task(tx).unwrap());
 
-    spawner.spawn(sensor_task(i2c_mpu, i2c_mag).unwrap());
-    spawner.spawn(control_task(motors, tx).unwrap());
+    let cpu1_fn = move || {
+        let executor = CORE1_EXECUTOR.init(Executor::new());
+
+        executor.run(|spawner| {
+            let (i2c_mpu, i2c_mag, motors) = atlas_controller::init_core1_hardware!(peripherals);
+
+            spawner.spawn(sensor_task(i2c_mpu, i2c_mag).unwrap());
+            spawner.spawn(control_task(motors).unwrap());
+        });
+    };
+
+    let core1_stack = CORE1_STACK.init(CpuStack::new());
+    let guard = cpu_control.start_app_core(core1_stack, cpu1_fn).unwrap();
+    core::mem::forget(guard);
 
     loop {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(10)).await;

@@ -33,21 +33,28 @@ macro_rules! define_robot_config {
         pub const UDP_PORT: u16 = $udp_port;
 
         #[macro_export]
-        macro_rules! init_robot_hardware {
+        macro_rules! init_core0_hardware {
             ($p:expr) => {{
-                use esp_hal::ledc::channel::ChannelIFace;
-                use esp_hal::ledc::timer::TimerIFace;
-
                 ::paste::paste! {
-                    let uart_bus = esp_hal::uart::Uart::new(
+                    esp_hal::uart::Uart::new(
                         $p.[<UART $u_port>],
                         esp_hal::uart::Config::default().with_baudrate($u_baud),
                     )
                     .unwrap()
                     .with_tx($p.[<GPIO $u_tx>])
                     .with_rx($p.[<GPIO $u_rx>])
-                    .into_async();
+                    .into_async()
+                }
+            }};
+        }
 
+        #[macro_export]
+        macro_rules! init_core1_hardware {
+            ($p:expr) => {{
+                use esp_hal::ledc::channel::ChannelIFace;
+                use esp_hal::ledc::timer::TimerIFace;
+
+                ::paste::paste! {
                     let i2c_mpu = esp_hal::i2c::master::I2c::new(
                         $p.[<I2C $mpu_port>],
                         esp_hal::i2c::master::Config::default().with_frequency(esp_hal::time::Rate::from_khz(400)),
@@ -100,7 +107,7 @@ macro_rules! define_robot_config {
                         lift: $crate::motors::Bts7960Motor::new(lift_r, lift_l, 1),
                     };
 
-                    (uart_bus, i2c_mpu, i2c_mag, motors)
+                    (i2c_mpu, i2c_mag, motors)
                 }
             }};
         }
