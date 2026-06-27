@@ -1,0 +1,44 @@
+[package]
+name = "atlas-controller"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.91"
+
+[[bin]]
+name = "atlas-controller"
+path = "./src/bin/main.rs"
+
+[dependencies]
+embassy-executor = { version = "0.10.0", features = ["log"] }
+embassy-net = { version = "0.9.1", features = ["dhcpv4", "log", "medium-ethernet", "tcp", "udp"] }
+embassy-time = { version = "0.5.0", features = ["log"] }
+embedded-io = "0.7.1"
+embedded-io-async = "0.7.0"
+esp-alloc = "0.10.0"
+esp-backtrace = { version = "0.19.0", features = ["esp32", "panic-handler", "println"] }
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32", "log-04"] }
+esp-hal = { version = "~1.1.0", features = ["esp32", "log-04", "unstable"] }
+esp-println = { version = "0.17.0", features = ["esp32", "log-04"] }
+esp-radio = { version = "0.18.0", features = ["esp-alloc", "esp32", "log-04", "unstable", "wifi"] }
+esp-rtos = { version = "0.3.0", features = ["embassy", "esp-alloc", "esp-radio", "esp32", "log-04"] }
+log = "0.4.27"
+smoltcp = { version = "0.13.0", default-features = false, features = ["log", "medium-ethernet", "multicast", "proto-dhcpv4", "proto-dns", "proto-ipv4", "socket-dns", "socket-icmp", "socket-raw", "socket-tcp", "socket-udp"] }
+
+critical-section = "1.2.0"
+static_cell = "2.1.1"
+embassy-sync = { version = "0.8.0", features = ["log"] }
+libm = "0.2.16"
+embedded-hal-async = "1.0.0"
+embedded-hal = "1.0.0"
+embedded-hal-bus = { version = "0.3.0", features = ["async"] }
+embassy-embedded-hal = "0.6.0"
+paste = "1.0.15"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+debug = 2
+lto = 'fat'
+opt-level = 's'
