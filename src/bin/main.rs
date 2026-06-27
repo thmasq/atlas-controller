@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(clippy::future_not_send, clippy::large_stack_frames)]
 
 use atlas_controller::motors::MotorController;
 use atlas_controller::protocol::FrameParser;
