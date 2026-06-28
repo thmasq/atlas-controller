@@ -15,7 +15,10 @@ macro_rules! define_robot_config {
             task_interval_ms: $s_interval:literal,
             block_lift_when_driving: $s_block_lift:expr,
             block_drive_when_lifting: $s_block_drive:expr,
-            estop_latch: $s_estop:expr $(,)?
+            estop_latch: $s_estop:expr $(,)?,
+            min_pwm: $min_pwm:literal,
+            max_pwm: $max_pwm:literal
+
         },
         wifi: { ssid: $wifi_ssid:literal, password: $wifi_pass:literal, ip: [$ip0:literal, $ip1:literal, $ip2:literal, $ip3:literal] $(,)? },
         udp: { port: $udp_port:literal $(,)? }
@@ -31,6 +34,8 @@ macro_rules! define_robot_config {
         pub const WIFI_PASSWORD: &str = $wifi_pass;
         pub const WIFI_IP: [u8; 4] = [$ip0, $ip1, $ip2, $ip3];
         pub const UDP_PORT: u16 = $udp_port;
+        pub const MIN_PWM: u32 = $min_pwm;
+        pub const MAX_PWM: u32 = $max_pwm;
 
         #[macro_export]
         macro_rules! init_core0_hardware {

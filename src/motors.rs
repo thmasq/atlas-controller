@@ -64,14 +64,25 @@ impl<'a, S: TimerSpeed> Bts7960Motor<'a, S> {
 
     /// Writes the current speed to the PWM hardware.
     fn apply_speed(&self) {
-        let duty_pct = self.current_speed.unsigned_abs();
+        let speed_abs = self.current_speed.unsigned_abs();
+
+        let duty = if speed_abs == 0 {
+            0
+        } else {
+            let range = crate::config::MAX_PWM - crate::config::MIN_PWM;
+            let offset = u32::from(speed_abs - 1);
+
+            crate::config::MIN_PWM + (offset * range / 99)
+        };
+
+        let duty_val = duty as u8;
 
         if self.current_speed >= 0 {
-            let _ = self.rpwm.set_duty(duty_pct);
+            let _ = self.rpwm.set_duty(duty_val);
             let _ = self.lpwm.set_duty(0);
         } else {
             let _ = self.rpwm.set_duty(0);
-            let _ = self.lpwm.set_duty(duty_pct);
+            let _ = self.lpwm.set_duty(duty_val);
         }
     }
 }
