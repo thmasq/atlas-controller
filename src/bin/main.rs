@@ -37,6 +37,8 @@ static SENSOR_WATCH: Watch<CriticalSectionRawMutex, SensorSnapshot, 2> = Watch::
 static CORE1_STACK: StaticCell<CpuStack<8192>> = StaticCell::new();
 static CORE1_EXECUTOR: StaticCell<Executor> = StaticCell::new();
 
+esp_bootloader_esp_idf::esp_app_desc!();
+
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: StaticCell<$t> = StaticCell::new();
