@@ -240,6 +240,107 @@ async fn udp_listener_task(stack: NetStack<'static>) {
     }
 }
 
+#[embassy_executor::task]
+async fn http_listener_task(stack: NetStack<'static>) {
+    let mut rx_buffer = [0; 1024];
+    let mut tx_buffer = [0; 4096];
+
+    loop {
+        if !stack.is_link_up() {
+            Timer::after(Duration::from_millis(500)).await;
+            continue;
+        }
+
+        let mut socket = embassy_net::tcp::TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+        socket.set_timeout(Some(Duration::from_secs(5)));
+
+        if let Err(e) = socket.accept(9080).await {
+            log::warn!("HTTP accept error: {:?}", e);
+            continue;
+        }
+
+        let mut buf = [0u8; 1024];
+        match embedded_io_async::Read::read(&mut socket, &mut buf).await {
+            Ok(0) => {}
+            Ok(len) => {
+                let data = &buf[..len];
+
+                let mut body_idx = None;
+                for i in 0..len.saturating_sub(3) {
+                    if data[i..i + 4] == [b'\r', b'\n', b'\r', b'\n'] {
+                        body_idx = Some(i + 4);
+                        break;
+                    }
+                }
+
+                if data.starts_with(b"GET / ") || data.starts_with(b"GET /index.html") {
+                    let html = include_str!("../../index.html");
+                    let header =
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n";
+
+                    let _ =
+                        embedded_io_async::Write::write_all(&mut socket, header.as_bytes()).await;
+                    let _ = embedded_io_async::Write::write_all(&mut socket, html.as_bytes()).await;
+                } else if data.starts_with(b"POST /api/cmd") {
+                    if let Some(idx) = body_idx {
+                        let mut payload = [0u8; 8];
+                        let available = len - idx;
+
+                        let bytes_read = if available >= 8 {
+                            payload.copy_from_slice(&data[idx..idx + 8]);
+                            8
+                        } else {
+                            payload[..available].copy_from_slice(&data[idx..]);
+                            if let Ok(extra) = embedded_io_async::Read::read(
+                                &mut socket,
+                                &mut payload[available..],
+                            )
+                            .await
+                            {
+                                available + extra
+                            } else {
+                                available
+                            }
+                        };
+
+                        if bytes_read == 8 {
+                            let packet_type = payload[0];
+                            let left = payload[1] as i8;
+                            let right = payload[2] as i8;
+                            let lift = payload[4] as i8;
+
+                            match packet_type {
+                                0x01 => {
+                                    let _ =
+                                        COMMAND_CHANNEL.try_send(Command::Drive { left, right });
+                                    let _ = COMMAND_CHANNEL.try_send(Command::Lift { power: lift });
+                                }
+                                0x02 => {
+                                    log::info!(
+                                        "Received Auto Mode / Resume Navigation HTTP request."
+                                    );
+                                }
+                                _ => log::warn!("Unknown HTTP packet type: {packet_type:#04X}"),
+                            }
+                        }
+                    }
+
+                    let response = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                    let _ =
+                        embedded_io_async::Write::write_all(&mut socket, response.as_bytes()).await;
+                } else {
+                    let response = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n";
+                    let _ =
+                        embedded_io_async::Write::write_all(&mut socket, response.as_bytes()).await;
+                }
+            }
+            Err(e) => log::warn!("HTTP read error: {:?}", e),
+        }
+
+        let _ = embedded_io_async::Write::flush(&mut socket).await;
+    }
+}
+
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
     esp_println::logger::init_logger_from_env();
@@ -288,7 +389,7 @@ async fn main(spawner: Spawner) -> ! {
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         net_config,
-        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        mk_static!(StackResources<4>, StackResources::<4>::new()),
         seed,
     );
 
@@ -298,6 +399,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(udp_listener_task(stack).unwrap());
     spawner.spawn(uart_rx_task(rx).unwrap());
     spawner.spawn(uart_tx_task(tx).unwrap());
+    spawner.spawn(http_listener_task(stack).unwrap());
 
     let cpu1_fn = move || {
         let executor = CORE1_EXECUTOR.init(Executor::new());

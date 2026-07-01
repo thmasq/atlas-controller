@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Atlas Web Controller</title>
+    <style>
+      /* Dark Theme */
+      :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --primary: #3b82f6;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; user-select: none; }
+      body {
+      background-color: var(--bg); color: var(--text);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      min-height: 100vh; padding: 20px; overflow: hidden;
+      }
+      .header h1 {
+      font-size: 2.5rem; font-weight: 800; margin-bottom: 40px;
+      background: linear-gradient(135deg, #60a5fa, #a78bfa);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      }
+      .dashboard {
+      display: flex; flex-wrap: wrap; gap: 60px; justify-content: center; align-items: center;
+      background: rgba(30, 41, 59, 0.5); padding: 40px; border-radius: 24px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      }
+      /* Virtual Joystick */
+      .joystick-wrapper { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+      .joystick-zone {
+      width: 220px; height: 220px; border-radius: 50%; position: relative;
+      background: var(--bg); box-shadow: inset 0 4px 20px rgba(0,0,0,0.5);
+      border: 2px solid rgba(59, 130, 246, 0.2);
+      display: flex; align-items: center; justify-content: center; touch-action: none;
+      }
+      .stick {
+      width: 80px; height: 80px; border-radius: 50%; position: absolute;
+      background: linear-gradient(135deg, var(--primary), #2563eb);
+      box-shadow: 0 10px 20px rgba(0,0,0,0.4), inset 0 2px 5px rgba(255,255,255,0.3);
+      cursor: grab; transition: transform 0.1s ease-out;
+      }
+      .stick:active { cursor: grabbing; }
+      .joystick-hint { color: var(--text-muted); font-size: 0.85rem; letter-spacing: 0.5px; }
+      /* Action Buttons */
+      .controls { display: flex; flex-direction: column; gap: 16px; width: 220px; }
+      button {
+      background: var(--surface); color: var(--text);
+      border: 1px solid rgba(255,255,255,0.1); padding: 16px; border-radius: 12px;
+      font-size: 1rem; font-weight: 600; cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      button:hover { transform: translateY(-2px); box-shadow: 0 8px 16px rgba(0,0,0,0.2); }
+      button:active { transform: translateY(1px); }
+      button.primary { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3); }
+      button.primary:hover { background: var(--primary); color: white; }
+      button.danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+      button.danger:hover { background: var(--danger); color: white; }
+      button.success { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
+      button.success:hover { background: #10b981; color: white; }
+      /* Status Indicator */
+      .status-bar { margin-top: 40px; display: flex; align-items: center; gap: 10px; font-size: 0.9rem; }
+      .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 10px var(--danger); transition: all 0.3s; }
+      .dot.active { background: #10b981; box-shadow: 0 0 12px #10b981; }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>Atlas Web Controller</h1>
+    </div>
+    <div class="dashboard">
+      <div class="joystick-wrapper">
+        <div class="joystick-zone" id="joystickZone">
+          <div class="stick" id="stick"></div>
+        </div>
+        <div class="joystick-hint">Drag or use W A S D</div>
+      </div>
+      <div class="controls">
+        <!-- Lift buttons (Action held) -->
+        <button class="primary" onmousedown="sendLift(100)" onmouseup="sendLift(0)" onmouseleave="sendLift(0)" ontouchstart="sendLift(100)" ontouchend="sendLift(0)">Lift Up (100)</button>
+        <button class="primary" onmousedown="sendLift(-100)" onmouseup="sendLift(0)" onmouseleave="sendLift(0)" ontouchstart="sendLift(-100)" ontouchend="sendLift(0)">Lift Down (100)</button>
+        <!-- Stop commands -->
+        <button onmousedown="sendStop()" ontouchstart="sendStop()">Stop Drive</button>
+        <button class="danger" onmousedown="sendStop()" ontouchstart="sendStop()">Emergency Stop</button>
+        <!-- Auto mode / Resume (Single Press) -->
+        <button class="success" onmousedown="sendResumeNav()" ontouchstart="sendResumeNav()">Resume Navigation</button>
+      </div>
+    </div>
+    <div class="status-bar">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">Awaiting input...</span>
+    </div>
+    <script>
+      const stick = document.getElementById('stick');
+      const zone = document.getElementById('joystickZone');
+      const MAX_RADIUS = 80;
+
+      let state = {
+          left: 0,
+          right: 0,
+          lift: 0
+      };
+
+      let activeKeys = {
+          w: false,
+          a: false,
+          s: false,
+          d: false
+      };
+
+      let isDragging = false;
+      let lastSent = {
+          left: null,
+          right: null,
+          lift: null
+      };
+
+      function updateJoystick(x, y) {
+          const distance = Math.min(Math.sqrt(x * x + y * y), MAX_RADIUS);
+          const angle = Math.atan2(y, x);
+
+          const stickX = Math.cos(angle) * distance;
+          const stickY = Math.sin(angle) * distance;
+
+          stick.style.transform = `translate(${stickX}px, ${stickY}px)`;
+          calculateMotorPowers(stickX, stickY, distance);
+      }
+
+      function calculateMotorPowers(x, y, distance) {
+          const normX = x / MAX_RADIUS;
+          const normY = -y / MAX_RADIUS;
+
+          let left = normY + normX;
+          let right = normY - normX;
+
+          const max = Math.max(Math.abs(left), Math.abs(right));
+          if (max > 1.0) {
+              left /= max;
+              right /= max;
+          }
+
+          const mag = distance / MAX_RADIUS;
+          state.left = Math.round(left * mag * 100);
+          state.right = Math.round(right * mag * 100);
+      }
+
+      zone.addEventListener('pointerdown', (e) => {
+          isDragging = true;
+          stick.style.transition = 'none';
+          handlePointer(e);
+          zone.setPointerCapture(e.pointerId);
+      });
+
+      zone.addEventListener('pointermove', (e) => {
+          if (isDragging) handlePointer(e);
+      });
+
+      zone.addEventListener('pointerup', (e) => {
+          isDragging = false;
+          stick.style.transition = 'transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+          updateJoystick(0, 0);
+          zone.releasePointerCapture(e.pointerId);
+      });
+
+      function handlePointer(e) {
+          const rect = zone.getBoundingClientRect();
+          updateJoystick(e.clientX - (rect.left + rect.width / 2), e.clientY - (rect.top + rect.height / 2));
+      }
+
+      window.addEventListener('keydown', (e) => {
+          const key = e.key.toLowerCase();
+          if (activeKeys.hasOwnProperty(key) && !activeKeys[key]) {
+              activeKeys[key] = true;
+              updateFromKeys();
+          }
+      });
+
+      window.addEventListener('keyup', (e) => {
+          const key = e.key.toLowerCase();
+          if (activeKeys.hasOwnProperty(key)) {
+              activeKeys[key] = false;
+              updateFromKeys();
+          }
+      });
+
+      function updateFromKeys() {
+          if (isDragging) return;
+          let x = 0,
+              y = 0;
+          if (activeKeys.w) y -= MAX_RADIUS;
+          if (activeKeys.s) y += MAX_RADIUS;
+          if (activeKeys.a) x -= MAX_RADIUS;
+          if (activeKeys.d) x += MAX_RADIUS;
+
+          stick.style.transition = 'transform 0.1s ease-out';
+          updateJoystick(x, y);
+      }
+
+      function buildPacket(type, left, right, flags, lift) {
+          const buf = new Uint8Array(8);
+          buf[0] = type;
+          buf[1] = left & 0xFF;
+          buf[2] = right & 0xFF;
+          buf[3] = flags & 0xFF;
+          buf[4] = lift & 0xFF;
+          return buf;
+      }
+
+      async function sendCommandPacket(packet) {
+          try {
+              await fetch('http://192.168.4.1:9080/api/cmd', {
+                  method: 'POST',
+                  body: packet,
+                  mode: 'no-cors'
+              });
+              setStatus(true);
+          } catch (e) {
+              setStatus(false);
+          }
+      }
+
+      setInterval(() => {
+          const isIdle = (state.left === 0 && state.right === 0 && state.lift === 0);
+          const hasChanged = (state.left !== lastSent.left || state.right !== lastSent.right || state.lift !== lastSent.lift);
+
+          if (hasChanged || !isIdle) {
+              const packet = buildPacket(0x01, state.left, state.right, 0, state.lift);
+              sendCommandPacket(packet);
+
+              lastSent.left = state.left;
+              lastSent.right = state.right;
+              lastSent.lift = state.lift;
+          }
+      }, 50);
+
+      function sendLift(power) {
+          state.lift = power;
+      }
+
+      function sendStop() {
+          state.left = 0;
+          state.right = 0;
+          state.lift = 0;
+      }
+
+      function sendResumeNav() {
+          const packet = buildPacket(0x02, 0, 0, 0, 0);
+          sendCommandPacket(packet);
+      }
+
+      function setStatus(ok) {
+          document.getElementById('statusDot').className = `dot ${ok ? 'active' : ''}`;
+          document.getElementById('statusText').innerText = ok ? 'Connected & Transmitting' : 'Network Error';
+      }
+    </script>
+  </body>
+</html>
+
