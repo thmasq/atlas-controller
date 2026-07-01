@@ -23,7 +23,7 @@ use embassy_time::{Duration, Instant, Ticker, Timer};
 use esp_alloc as _;
 use esp_backtrace as _;
 use esp_hal::rng::Rng;
-use esp_hal::system::{CpuControl, Stack as CpuStack};
+use esp_hal::system::Stack as CpuStack;
 use esp_hal::uart::UartRx;
 use esp_hal::{Async, ledc::LowSpeed, uart::UartTx};
 use esp_radio::wifi::{Config as WifiDriverConfig, ap::AccessPointConfig};
@@ -254,8 +254,6 @@ async fn main(spawner: Spawner) -> ! {
 
     esp_rtos::start(timg0.timer0, sw_interrupt.software_interrupt0);
 
-    let mut cpu_control = CpuControl::new(peripherals.CPU_CTRL);
-
     let uart_bus = atlas_controller::init_core0_hardware!(peripherals);
     let (rx, tx) = uart_bus.split();
 
@@ -265,7 +263,9 @@ async fn main(spawner: Spawner) -> ! {
     let ap_config = WifiDriverConfig::AccessPoint(
         AccessPointConfig::default()
             .with_ssid(atlas_controller::config::WIFI_SSID)
-            .with_password(atlas_controller::config::WIFI_PASSWORD.to_string()),
+            .with_password(atlas_controller::config::WIFI_PASSWORD.to_string())
+            .with_auth_method(esp_radio::wifi::AuthenticationMethod::Wpa2Personal)
+            .with_channel(1),
     );
 
     let (controller, interfaces) = esp_radio::wifi::new(
@@ -311,8 +311,9 @@ async fn main(spawner: Spawner) -> ! {
     };
 
     let core1_stack = CORE1_STACK.init(CpuStack::new());
-    let guard = cpu_control.start_app_core(core1_stack, cpu1_fn).unwrap();
-    core::mem::forget(guard);
+    let core1_sw_int = sw_interrupt.software_interrupt1;
+
+    esp_rtos::start_second_core(peripherals.CPU_CTRL, core1_sw_int, core1_stack, cpu1_fn);
 
     loop {
         embassy_time::Timer::after(embassy_time::Duration::from_secs(10)).await;
